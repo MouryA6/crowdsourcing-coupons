@@ -6,12 +6,15 @@ const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const Joi = require('joi');
-const logger = require('./logger'); // Your custom logger
+const logger = require('./logger'); // Custom logger
 const pool = require('./db'); // Database connection pool
-const app = express();
 
+const app = express();
 const PORT = process.env.PORT || 5001;
-const refreshTokens = [];
+
+// Middleware
+app.use(helmet());
+app.use(express.json()); // Middleware to parse JSON requests
 
 // Rate limiting for login and refresh token routes
 const loginLimiter = rateLimit({
@@ -42,11 +45,10 @@ const refreshTokenSchema = Joi.object({
     token: Joi.string().required(),
 });
 
-// Middleware
-app.use(helmet());
-app.use(express.json()); // Middleware to parse JSON requests
+// In-memory refresh token storage
+const refreshTokens = [];
 
-// Functions
+// Utility Functions
 async function registerUser(username, email, password) {
     const hashedPassword = await bcrypt.hash(password, 10);
     const query = 'INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id, username, email, created_at';
@@ -169,7 +171,7 @@ app.get('/db-test', async (req, res) => {
         res.json(result.rows[0]);
     } catch (err) {
         logger.error(err.message);
-        res.status(500).json({ message: 'Database connection failed.' });
+        res.status(500).json({ message: 'Database connection failed.', error: err.message });
     }
 });
 
@@ -177,7 +179,21 @@ app.get('/', (req, res) => {
     res.send('Server is running!');
 });
 
-// Start Server
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+// Export app for testing
+module.exports = { app };
+
+// Start the server in non-test environments
+if (process.env.NODE_ENV !== 'test') {
+    const server = app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+    });
+
+    // Ensure database connection is closed on exit
+    process.on('SIGINT', async () => {
+        await pool.end();
+        server.close(() => {
+            console.log('Server closed.');
+            process.exit(0);
+        });
+    });
+}
